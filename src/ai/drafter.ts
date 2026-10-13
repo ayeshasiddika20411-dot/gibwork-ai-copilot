@@ -24,21 +24,42 @@ Output a professional, production-ready specification formatted in clean Markdow
 4. Code Snippets / Core Logic Implementation
 5. Submission Checklist & PR Description template`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
+  // Models list with fallback to prevent 503 transient errors
+  const models = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'];
+  let lastError = '';
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 1500, temperature: 0.7 }
-    })
-  });
+  for (const model of models) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { maxOutputTokens: 1500, temperature: 0.7 }
+          })
+        });
 
-  if (!res.ok) {
-    throw new Error(`Gemini API error: ${res.status} ${res.statusText}`);
+        if (res.ok) {
+          const data = await res.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) return text;
+        }
+
+        // If 503 or transient, wait 1.5s before retry
+        if (res.status === 503 || res.status === 429) {
+          lastError = `Status ${res.status}: Google AI server busy on ${model}`;
+          await new Promise((r) => setTimeout(r, 1500));
+        } else {
+          lastError = `API error: ${res.status} ${res.statusText}`;
+          break; // Try next model
+        }
+      } catch (err: any) {
+        lastError = err.message;
+      }
+    }
   }
 
-  const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No solution generated.';
+  throw new Error(`Failed across all models. Last error: ${lastError}`);
 }
